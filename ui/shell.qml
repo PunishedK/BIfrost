@@ -1,3 +1,4 @@
+
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -7,122 +8,237 @@ ShellRoot {
 
     readonly property string home: Quickshell.env("HOME") || ""
     readonly property string cli: home + "/.local/bin/bifrost"
+
     property bool online: false
     property var files: []
-    property string notice: "Ready. Files stay on your Arch computer."
+    property string notice: "The bridge is ready. Your files remain on this device."
     property string pairingURL: ""
     property string qrPath: ""
+    property string pendingDownloadId: ""
+    property string selectedDownloadDir: home + "/Downloads/BIfrost"
 
     function prettySize(bytes) {
         if (bytes < 1024) return bytes + " B"
         if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KiB"
         return (bytes / 1048576).toFixed(1) + " MiB"
     }
+
     function refreshFiles() {
         if (!listProc.running) listProc.running = true
     }
+
     function doDelete(id) {
+        if (deleteProc.running) return
         deleteProc.command = [app.cli, "delete", id]
-        if (!deleteProc.running) deleteProc.running = true
-    }
-    function doDownload(id) {
-        downloadProc.command = [app.cli, "download", id]
-        if (!downloadProc.running) downloadProc.running = true
+        deleteProc.running = true
     }
 
+    function doDownload(id) {
+        if (downloadProc.running || chooseDownloadDirProc.running) {
+            app.notice = "Wait for the current download to finish."
+            return
+        }
+        app.pendingDownloadId = id
+        chooseDownloadDirProc.running = true
+    }
+
+    // Reusable controls
+    // Go backend processes
     Process {
         id: healthProc
         command: [app.cli, "health"]
         running: true
-        onExited: (exitCode, exitStatus) => { if (exitCode !== 0) app.online = false }
+
+        onExited: (exitCode, exitStatus) => {
+            if (exitCode !== 0) app.online = false
+        }
+
         stdout: StdioCollector {
             onStreamFinished: {
-                try { app.online = JSON.parse(this.text).status === "ok" }
-                catch (e) { app.online = false }
+                try {
+                    app.online = JSON.parse(this.text).status === "ok"
+                } catch (e) {
+                    app.online = false
+                }
             }
         }
     }
+
     Process {
         id: listProc
         command: [app.cli, "list"]
         running: true
+
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
-                    var items = JSON.parse(this.text)
-                    app.files = Array.isArray(items) ? items : []
-                } catch (e) { app.files = []; app.notice = "File list unavailable: start BIfrost engine." }
+                    const result = JSON.parse(this.text)
+                    app.files = Array.isArray(result) ? result : []
+                } catch (e) {
+                    app.files = []
+                    app.notice = "Cannot list files. Check the BIfrost engine."
+                }
             }
         }
     }
+
     Process {
         id: uploadProc
-        stdout: StdioCollector { onStreamFinished: { if (this.text.trim()) { app.notice = "File uploaded successfully"; app.refreshFiles() } } }
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                if (this.text.trim()) {
+                    app.notice = "File uploaded to the bridge."
+                    app.refreshFiles()
+                }
+            }
+        }
+
         stderr: SplitParser {
             onRead: data => {
                 const line = String(data).trim()
-                if (line.startsWith("PROGRESS ")) app.notice = "Transferring: " + line.substring(9) + "%"
-                else if (line) app.notice = line
+
+                if (line.startsWith("PROGRESS "))
+                    app.notice = "Uploading: " + line.substring(9) + "%"
+                else if (line)
+                    app.notice = line
             }
         }
     }
+
     Process {
         id: downloadProc
-        stdout: StdioCollector { onStreamFinished: { if (this.text.trim()) app.notice = "Saved to " + this.text.trim() } }
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                if (this.text.trim())
+                    app.notice = "Saved to " + this.text.trim()
+            }
+        }
+
         stderr: SplitParser {
             onRead: data => {
                 const line = String(data).trim()
-                if (line.startsWith("PROGRESS ")) app.notice = "Transferring: " + line.substring(9) + "%"
-                else if (line) app.notice = line
+
+                if (line.startsWith("PROGRESS "))
+                    app.notice = "Downloading: " + line.substring(9) + "%"
+                else if (line)
+                    app.notice = line
             }
         }
     }
+
     Process {
         id: deleteProc
-        stdout: StdioCollector { onStreamFinished: { if (this.text.trim()) { app.notice = "File deleted"; app.refreshFiles() } } }
-        stderr: StdioCollector { onStreamFinished: if (this.text.trim()) app.notice = this.text.trim() }
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                if (this.text.trim()) {
+                    app.notice = "File removed from the bridge."
+                    app.refreshFiles()
+                }
+            }
+        }
+
+        stderr: StdioCollector {
+            onStreamFinished: {
+                if (this.text.trim()) app.notice = this.text.trim()
+            }
+        }
     }
+
     Process {
         id: pairProc
         command: [app.cli, "pair"]
+
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
                     const response = JSON.parse(this.text)
+
                     app.qrPath = ""
                     app.pairingURL = response.url || ""
                     app.qrPath = response.qr || ""
-                    app.notice = "Invitation expires in 3 minutes; scan from iPhone Safari."
-                } catch (e) { app.notice = "Could not generate pairing QR" }
+
+                    app.notice = "Portal active for 3 minutes. Scan the QR with another device."
+                } catch (e) {
+                    app.notice = "Could not generate the pairing QR."
+                }
             }
         }
-        stderr: StdioCollector { onStreamFinished: if (this.text.trim()) app.notice = this.text.trim() }
+
+        stderr: StdioCollector {
+            onStreamFinished: {
+                if (this.text.trim())
+                    app.notice = this.text.trim()
+            }
+        }
     }
+
     Process {
         id: revokeProc
         command: [app.cli, "revoke"]
+
         stdout: StdioCollector {
-            onStreamFinished: { app.notice = "All iPhone sessions revoked"; app.qrPath = ""; app.pairingURL = "" }
+            onStreamFinished: {
+                app.notice = "All iPhone sessions revoked."
+                app.qrPath = ""
+                app.pairingURL = ""
+            }
         }
     }
-    Timer {
-        interval: 4000
-        running: true
-        repeat: true
-        onTriggered: {
-            if (!healthProc.running) healthProc.running = true
-            app.refreshFiles()
+
+    Process {
+        id: chooseDownloadDirProc
+
+        command: [
+            "zenity",
+            "--file-selection",
+            "--directory",
+            "--title=BIfrost: choose download folder"
+        ]
+
+        stdout: StdioCollector {
+            onStreamFinished: {
+                const folder = this.text.trim()
+
+                if (!folder || !app.pendingDownloadId) return
+
+                app.selectedDownloadDir = folder
+
+                downloadProc.command = [
+                    app.cli,
+                    "download",
+                    app.pendingDownloadId,
+                    folder
+                ]
+
+                app.pendingDownloadId = ""
+                app.notice = "Crossing the bridge to " + folder + "…"
+                downloadProc.running = true
+            }
         }
     }
 
     Process {
         id: chooseProc
-        command: ["zenity", "--file-selection", "--title=BIfrost: choose a file"]
+
+        command: [
+            "zenity",
+            "--file-selection",
+            "--title=BIfrost: choose a file"
+        ]
+
         stdout: StdioCollector {
             onStreamFinished: {
                 const file = this.text.trim()
                 if (!file) return
-                if (uploadProc.running) { app.notice = "Wait for the current upload"; return }
+
+                if (uploadProc.running) {
+                    app.notice = "Wait for the current upload to finish."
+                    return
+                }
+
                 app.notice = "Uploading selected file…"
                 uploadProc.command = [app.cli, "upload", file]
                 uploadProc.running = true
@@ -130,168 +246,772 @@ ShellRoot {
         }
     }
 
+    Timer {
+        interval: 4000
+        running: true
+        repeat: true
+
+        onTriggered: {
+            if (!healthProc.running) healthProc.running = true
+            app.refreshFiles()
+        }
+    }
+
+    // Main desktop window
     FloatingWindow {
         id: win
-        title: "BIfrost · Native File Sharing"
-        implicitWidth: 840
-        implicitHeight: 690
-        color: "#0b111b"
+
+        title: "BIfrost · The Bridge Between Realms"
+        implicitWidth: 1120
+        implicitHeight: 910
+        color: "#090f19"
         visible: true
 
         Rectangle {
             anchors.fill: parent
-            color: "#0b111b"
+
+            gradient: Gradient {
+                GradientStop {
+                    position: 0.0
+                    color: "#101827"
+                }
+                GradientStop {
+                    position: 0.65
+                    color: "#0b1320"
+                }
+                GradientStop {
+                    position: 1.0
+                    color: "#090e18"
+                }
+            }
 
             Column {
+                id: layout
+
                 anchors.fill: parent
-                anchors.margins: 25
-                spacing: 16
+                anchors.margins: 22
+                spacing: 13
 
-                Row {
-                    spacing: 14
-                    Rectangle { width: 48; height: 48; radius: 13; color: "#183245"
-                        Text { anchors.centerIn: parent; text: "❄"; color: "#93dbff"; font.pixelSize: 27 }
+                // Header
+                Item {
+                    width: parent.width
+                    height: 60
+
+                    Rectangle {
+                        width: 50
+                        height: 50
+                        radius: 13
+                        color: "#1a2c3b"
+                        border.color: "#bca16a"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "ᛒ"
+                            font.pixelSize: 30
+                            color: "#ebce91"
+                        }
                     }
+
                     Column {
+                        x: 65
+                        y: 5
                         spacing: 3
-                        Text { text: "BIFROST"; color: "#eef6ff"; font.pixelSize: 22; font.bold: true }
-                        Text { text: "NATIVE FILE SHARING"; color: "#7f99b1"; font.pixelSize: 10; font.letterSpacing: 2 }
-                    }
-                }
-                Rectangle { width: parent.width; height: 1; color: "#25364a" }
 
-                Row {
-                    width: parent.width
-                    spacing: 16
-                    Column {
-                        width: parent.width - 195
-                        spacing: 6
-                        Text { text: "Share without boundaries."; color: "#edf4fe"; font.pixelSize: 26; font.bold: true }
-                        Text { text: "Your Arch computer and iPhone, on the same Wi-Fi."; color: "#90a5ba"; font.pixelSize: 12 }
-                    }
-                    Rectangle {
-                        width: 175; height: 40; radius: 10
-                        color: app.online ? "#153a2f" : "#3b252b"
-                        Text { anchors.centerIn: parent; text: app.online ? "● Engine online" : "● Engine offline"; color: app.online ? "#8ee6b6" : "#f7a8af"; font.pixelSize: 13 }
-                    }
-                }
+                        Text {
+                            text: "BIfrost"
+                            font.pixelSize: 25
+                            font.bold: true
+                            color: "#f2f5fc"
+                        }
 
-                Row {
-                    width: parent.width
-                    height: 208
-                    spacing: 15
-                    Rectangle {
-                        width: parent.width * .55 - 8
-                        height: parent.height
-                        radius: 15
-                        color: "#142131"
-                        border.color: "#2b4055"
-                        Column {
-                            anchors.fill: parent
-                            anchors.margins: 20
-                            spacing: 14
-                            Text { text: "Send a file"; color: "#f0f6ff"; font.pixelSize: 19; font.bold: true }
-                            Text { text: "Choose a file and store it locally.\nMaximum 512 MiB per file."; color: "#94a9bc"; font.pixelSize: 13; lineHeight: 1.4 }
-                            Rectangle {
-                                width: parent.width; height: 53; radius: 10
-                                color: "#a7e1ff"
-                                Text { anchors.centerIn: parent; text: "↥  Choose file"; color: "#092032"; font.pixelSize: 15; font.bold: true }
-                                MouseArea { anchors.fill: parent; onClicked: { if (!chooseProc.running) chooseProc.running = true } }
-                            }
+                        Text {
+                            text: "THE BRIDGE BETWEEN REALMS"
+                            font.pixelSize: 10
+                            font.letterSpacing: 2.5
+                            color: "#bca16a"
                         }
                     }
+
                     Rectangle {
-                        width: parent.width * .45 - 8
-                        height: parent.height
-                        radius: 15
-                        color: "#142131"
-                        border.color: "#2b4055"
-                        Column {
-                            anchors.fill: parent
-                            anchors.margins: 17
-                            spacing: 10
-                            Text { text: "Pair iPhone"; color: "#f0f6ff"; font.pixelSize: 19; font.bold: true }
-                            Text { text: "One-use invite · 3 minutes"; color: "#94a9bc"; font.pixelSize: 11 }
-                            Row {
-                                spacing: 10
-                                Rectangle { width: 108; height: 110; radius: 7; color: "#fff"; visible: app.qrPath !== ""
-                                    Image { anchors.fill: parent; anchors.margins: 6; fillMode: Image.PreserveAspectFit; cache: false; source: app.qrPath ? "file://" + app.qrPath : "" }
-                                }
-                                Column {
-                                    spacing: 10
-                                    Rectangle {
-                                        width: app.qrPath ? 110 : 170; height: 43; radius: 9; color: "#294966"
-                                        Text { anchors.centerIn: parent; text: "Generate QR"; color: "#e5f4ff"; font.pixelSize: 12; font.bold: true }
-                                        MouseArea { anchors.fill: parent; onClicked: { if (!pairProc.running) pairProc.running = true } }
-                                    }
-                                    Rectangle {
-                                        width: app.qrPath ? 110 : 170; height: 35; radius: 9; color: "#3a2936"
-                                        Text { anchors.centerIn: parent; text: "Revoke devices"; color: "#ffc4d0"; font.pixelSize: 11 }
-                                        MouseArea { anchors.fill: parent; onClicked: { if (!revokeProc.running) revokeProc.running = true } }
-                                    }
-                                    Rectangle {
-                                        width: app.qrPath ? 110 : 170; height: 30; radius: 8; color: "#1e364a"
-                                        Text { anchors.centerIn: parent; text: "Copy link"; color: "#d3ebf9"; font.pixelSize: 11 }
-                                        MouseArea { anchors.fill: parent; onClicked: { if (app.pairingURL) Quickshell.clipboardText = app.pairingURL } }
-                                    }
-                                }
-                            }
+                        anchors.right: parent.right
+                        anchors.rightMargin: 47
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        width: 153
+                        height: 34
+                        radius: 17
+
+                        color: app.online ? "#17392f" : "#402632"
+                        border.color: app.online ? "#32765c" : "#7b3b51"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: app.online ? "●  BRIDGE ONLINE" : "●  ENGINE OFFLINE"
+                            color: app.online ? "#a5eccd" : "#ffc2c9"
+                            font.pixelSize: 11
+                            font.bold: true
                         }
                     }
+                    // Close BIfrost
+Rectangle {
+    width: 34
+    height: 34
+    radius: 9
+
+    anchors.right: parent.right
+    anchors.verticalCenter: parent.verticalCenter
+
+    color: closeMouse.containsMouse ? "#6a3440" : "#243345"
+    border.color: closeMouse.containsMouse ? "#d47a89" : "#405066"
+
+    Text {
+        anchors.centerIn: parent
+        text: "×"
+        font.pixelSize: 23
+        color: "#f2d6db"
+    }
+
+    MouseArea {
+        id: closeMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+
+        onClicked: Qt.quit()
+    }
+}
                 }
 
-                Rectangle {
-                    width: parent.width; height: 52; radius: 10; color: "#172538"
-                    Row {
-                        anchors.fill: parent; anchors.margins: 12; spacing: 18
-                        Text { anchors.verticalCenter: parent.verticalCenter; text: "Stored files   " + app.files.length; color: "#eaf5ff"; font.pixelSize: 16; font.bold: true }
-                        Rectangle { width: 80; height: 28; radius: 8; color: "#284059"; anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "Refresh"; color: "#cce6fa"; font.pixelSize: 11 }
-                            MouseArea { anchors.fill: parent; onClicked: app.refreshFiles() }
-                        }
-                        Rectangle { width: 110; height: 28; radius: 8; color: "#284059"; anchors.verticalCenter: parent.verticalCenter
-                            Text { anchors.centerIn: parent; text: "Downloads folder"; color: "#cce6fa"; font.pixelSize: 10 }
-                            MouseArea { anchors.fill: parent; onClicked: Quickshell.execDetached(["xdg-open", app.home + "/Downloads/BIfrost"]) }
-                        }
-                    }
-                }
-                ListView {
-                    id: fileList
+                // Bifrost bridge visualization
+                SurfaceCard {
+                    id: hero
+
                     width: parent.width
-                    height: 183
-                    model: app.files
+                    height: 137
                     clip: true
-                    spacing: 6
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: fileList.width
-                        height: 49
-                        radius: 9
-                        color: "#142131"
-                        Row {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 12
-                            Column {
-                                width: parent.width - 200
-                                spacing: 3
-                                Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; color: "#f0f7ff"; font.pixelSize: 13 }
-                                Text { text: app.prettySize(modelData.size); color: "#8ca8c1"; font.pixelSize: 10 }
+
+                    Text {
+                        x: 22
+                        y: 15
+                        text: "Two worlds. One bridge."
+                        color: "#f1f5fc"
+                        font.pixelSize: 21
+                        font.bold: true
+                    }
+
+                    Text {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 22
+                        y: 22
+
+                        text: "LOCAL WI-FI  /  PRIVATE TRANSFERS"
+                        color: "#8399b2"
+                        font.pixelSize: 10
+                        font.letterSpacing: 1.2
+                    }
+
+                    Row {
+                        id: realmRow
+
+                        x: 22
+                        y: 67
+                        width: parent.width - 44
+                        height: 50
+                        spacing: 12
+
+                        Rectangle {
+                            width: 46
+                            height: 46
+                            radius: 23
+                            color: "#213b4b"
+                            border.color: "#5babc7"
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "A"
+                                font.pixelSize: 22
+                                font.bold: true
+                                color: "#a9e9ff"
                             }
-                            Rectangle { width: 82; height: 28; radius: 7; color: "#24506c"; anchors.verticalCenter: parent.verticalCenter
-                                Text { anchors.centerIn: parent; text: "Download"; color: "#eaf5ff"; font.pixelSize: 11 }
-                                MouseArea { anchors.fill: parent; onClicked: app.doDownload(modelData.id) }
+                        }
+
+                        Column {
+                            width: 104
+                            spacing: 3
+
+                            Text {
+                                text: "MIDGARD"
+                                font.pixelSize: 10
+                                color: "#c5aa77"
+                                font.letterSpacing: 1.4
                             }
-                            Rectangle { width: 65; height: 28; radius: 7; color: "#4a2936"; anchors.verticalCenter: parent.verticalCenter
-                                Text { anchors.centerIn: parent; text: "Delete"; color: "#ffc6d3"; font.pixelSize: 11 }
-                                MouseArea { anchors.fill: parent; onClicked: app.doDelete(modelData.id) }
+                            Text {
+                                text: "This device"
+                                font.pixelSize: 14
+                                font.bold: true
+                                color: "#ecf3fc"
+                            }
+                            Text {
+                                text: "Local storage"
+                                font.pixelSize: 10
+                                color: "#8a9eb4"
+                            }
+                        }
+
+                        // Aurora bridge
+                        Item {
+                            width: Math.max(
+                                40,
+                                realmRow.width - 46 - 46 - 104 - 104
+                                - realmRow.spacing * 4
+                            )
+                            height: 46
+
+                            Rectangle {
+                                x: 0
+                                y: 29
+                                width: parent.width
+                                height: 5
+                                radius: 3
+
+                                gradient: Gradient {
+                                    orientation: Gradient.Horizontal
+
+                                    GradientStop {
+                                        position: 0.00
+                                        color: "#55b7c7"
+                                    }
+                                    GradientStop {
+                                        position: 0.27
+                                        color: "#619de9"
+                                    }
+                                    GradientStop {
+                                        position: 0.53
+                                        color: "#967be8"
+                                    }
+                                    GradientStop {
+                                        position: 0.77
+                                        color: "#d494ca"
+                                    }
+                                    GradientStop {
+                                        position: 1.00
+                                        color: "#ebc37b"
+                                    }
+                                }
+                            }
+
+                            Text {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                y: 2
+                                text: "✦  B I F R Ö S T  ✦"
+                                color: "#b7a2dc"
+                                font.pixelSize: 11
+                                font.letterSpacing: 1.2
+                            }
+
+                            Repeater {
+                                model: 9
+
+                                Rectangle {
+                                    x: (index + 0.5) * (parent.width / 9)
+                                    y: 24 - (index % 3) * 7
+                                    width: 3
+                                    height: 3
+                                    radius: 2
+                                    color: index % 2 === 0 ? "#b1dbff" : "#e4bfdc"
+                                    opacity: 0.75
+                                }
+                            }
+                        }
+
+                        Column {
+                            width: 104
+                            spacing: 3
+
+                            Text {
+                                text: "ASGARD"
+                                font.pixelSize: 10
+                                color: "#c5aa77"
+                                font.letterSpacing: 1.4
+                            }
+                            Text {
+                                text: "Other device"
+                                font.pixelSize: 14
+                                font.bold: true
+                                color: "#ecf3fc"
+                            }
+                            Text {
+                                text: "Web browser"
+                                font.pixelSize: 10
+                                color: "#8a9eb4"
+                            }
+                        }
+
+                        Rectangle {
+                            width: 46
+                            height: 46
+                            radius: 23
+                            color: "#3b3047"
+                            border.color: "#d9b57f"
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✧"
+                                font.pixelSize: 26
+                                color: "#ffe5b0"
                             }
                         }
                     }
                 }
+
+                // Send and Pair panels
+                Row {
+                    id: actions
+
+                    width: parent.width
+                    height: 332
+                    spacing: 14
+
+                    // Send panel
+                    SurfaceCard {
+                        id: sendCard
+
+                        width: Math.round(
+                            (parent.width - actions.spacing) * 0.42
+                        )
+                        height: parent.height
+
+                        Rectangle {
+                            x: 20
+                            y: 0
+                            width: 94
+                            height: 3
+
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop {
+                                    position: 0
+                                    color: "#5dcae6"
+                                }
+                                GradientStop {
+                                    position: 1
+                                    color: "#957ce3"
+                                }
+                            }
+                        }
+
+                        Text {
+                            x: 22
+                            y: 23
+                            text: "01  ·  SEND A FILE"
+                            color: "#eacb8a"
+                            font.pixelSize: 12
+                            font.bold: true
+                            font.letterSpacing: 1.3
+                        }
+
+                        Text {
+                            x: 22
+                            y: 53
+                            text: "Send something across the bridge."
+                            font.pixelSize: 19
+                            font.bold: true
+                            color: "#f3f6ff"
+                        }
+
+                        Text {
+                            x: 22
+                            y: 91
+                            width: parent.width - 44
+                            wrapMode: Text.WordWrap
+                            text: "Choose a file to share with another device over your local network."
+                            color: "#9fb4c9"
+                            font.pixelSize: 13
+                            lineHeight: 1.35
+                        }
+
+                        Rectangle {
+                            x: 22
+                            y: 160
+                            width: parent.width - 44
+                            height: 56
+                            radius: 11
+                            color: "#192b3d"
+                            border.color: "#34475c"
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "MIDGARD  →  BIFRÖST  →  ASGARD"
+                                color: "#8abecf"
+                                font.pixelSize: 12
+                                font.letterSpacing: 0.8
+                            }
+                        }
+
+                        BridgeButton {
+                            x: 22
+                            y: 239
+                            width: parent.width - 44
+                            height: 52
+                            caption: "↑   Choose file to share"
+                            base: "#b8e6f5"
+                            ink: "#112333"
+
+                            onTriggered: {
+                                if (!chooseProc.running)
+                                    chooseProc.running = true
+                            }
+                        }
+
+                        Text {
+                            x: 24
+                            y: 303
+                            text: "MAX 512 MiB PER FILE  ·  LOCAL STORAGE"
+                            color: "#748da5"
+                            font.pixelSize: 10
+                            font.letterSpacing: 0.6
+                        }
+                    }
+
+                    // Device pairing panel
+                    SurfaceCard {
+                        id: pairCard
+
+                        width: actions.width - sendCard.width - actions.spacing
+                        height: parent.height
+
+                        Rectangle {
+                            x: 20
+                            y: 0
+                            width: 94
+                            height: 3
+
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop {
+                                    position: 0
+                                    color: "#b290de"
+                                }
+                                GradientStop {
+                                    position: 1
+                                    color: "#e1bc79"
+                                }
+                            }
+                        }
+
+                        Text {
+                            x: 22
+                            y: 22
+                            text: "02  ·  PAIR A DEVICE"
+                            color: "#eacb8a"
+                            font.pixelSize: 12
+                            font.bold: true
+                            font.letterSpacing: 1.3
+                        }
+
+                        Text {
+                            x: 22
+                            y: 46
+                            text: "Open the gateway with a single scan"
+                            font.pixelSize: 12
+                            color: "#9bb0c5"
+                        }
+
+                        // 242px white QR frame, 222px QR image
+                        Rectangle {
+                            id: qrPane
+
+                            x: 22
+                            y: 74
+                            width: 242
+                            height: 242
+                            radius: 13
+
+                            color: app.qrPath !== "" ? "#ffffff" : "#1a2b3d"
+                            border.color: app.qrPath !== "" ? "#ffffff" : "#3a4c61"
+
+                            Image {
+                                anchors.fill: parent
+                                anchors.margins: 10
+
+                                source: app.qrPath
+                                    ? "file://" + app.qrPath
+                                    : ""
+
+                                visible: app.qrPath !== ""
+                                fillMode: Image.PreserveAspectFit
+                                smooth: false
+                                cache: false
+                            }
+
+                            // QR placeholder
+                            Column {
+                                anchors.centerIn: parent
+                                spacing: 14
+                                visible: app.qrPath === ""
+
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: "ᛟ"
+                                    font.pixelSize: 57
+                                    color: "#c4ad7b"
+                                }
+
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: "PORTAL INACTIVE"
+                                    font.pixelSize: 11
+                                    font.bold: true
+                                    font.letterSpacing: 1.2
+                                    color: "#a9bdd1"
+                                }
+
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: "Generate a QR to connect"
+                                    font.pixelSize: 11
+                                    color: "#849ab1"
+                                }
+                            }
+                        }
+
+                        Column {
+                            x: 282
+                            y: 80
+                            width: parent.width - 304
+                            spacing: 13
+
+                            BridgeButton {
+                                width: parent.width
+                                height: 47
+
+                                caption: app.qrPath
+                                    ? "↻   New QR code"
+                                    : "✦   Generate QR"
+
+                                base: "#dcc18a"
+                                ink: "#1d2531"
+
+                                onTriggered: {
+                                    if (!pairProc.running)
+                                        pairProc.running = true
+                                }
+                            }
+
+                            BridgeButton {
+                                width: parent.width
+                                height: 41
+                                caption: "Copy pairing link"
+
+                                onTriggered: {
+                                    if (app.pairingURL) {
+                                        Quickshell.clipboardText = app.pairingURL
+                                        app.notice = "Pairing link copied."
+                                    } else {
+                                        app.notice = "Generate a QR first."
+                                    }
+                                }
+                            }
+
+                            BridgeButton {
+                                width: parent.width
+                                height: 41
+                                caption: "Revoke devices"
+                                base: "#49303d"
+                                ink: "#ffc6d0"
+
+                                onTriggered: {
+                                    if (!revokeProc.running)
+                                        revokeProc.running = true
+                                }
+                            }
+
+                            Text {
+                                width: parent.width
+                                wrapMode: Text.WordWrap
+                                text: "ONE-TIME INVITE\nEXPIRES IN 3 MINUTES\nSAME WI-FI NETWORK"
+                                color: "#8da2b8"
+                                font.pixelSize: 10
+                                lineHeight: 1.6
+                                font.letterSpacing: 0.6
+                            }
+                        }
+                    }
+                }
+
+                // Shared file vault
+                SurfaceCard {
+                    id: vault
+
+                    width: parent.width
+
+                    height: Math.max(
+                        176,
+                        layout.height - 60 - hero.height
+                        - actions.height - statusPanel.height
+                        - layout.spacing * 4
+                    )
+
+                    Text {
+                        x: 19
+                        y: 19
+                        text: "THE VAULT"
+                        color: "#f0f5fc"
+                        font.pixelSize: 17
+                        font.bold: true
+                    }
+
+                    Text {
+                        x: 152
+                        y: 24
+                        text: app.files.length + " stored files"
+                        color: "#92aac3"
+                        font.pixelSize: 12
+                    }
+
+                    Row {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 17
+                        y: 14
+                        spacing: 10
+
+                        BridgeButton {
+                            width: 93
+                            height: 31
+                            caption: "↻  Refresh"
+                            onTriggered: app.refreshFiles()
+                        }
+
+                        BridgeButton {
+                            width: 123
+                            height: 31
+                            caption: "Open save folder"
+
+                            onTriggered: {
+                                Quickshell.execDetached([
+                                    "xdg-open",
+                                    app.selectedDownloadDir
+                                ])
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        x: 17
+                        y: 59
+                        width: parent.width - 34
+                        height: 1
+                        color: "#2a3a4c"
+                    }
+
+                    ListView {
+                        id: fileList
+
+                        x: 17
+                        y: 69
+                        width: parent.width - 34
+                        height: parent.height - 84
+
+                        model: app.files
+                        clip: true
+                        spacing: 7
+
+                        delegate: Rectangle {
+                            required property var modelData
+
+                            width: fileList.width
+                            height: 51
+                            radius: 9
+                            color: "#1b293a"
+                            border.color: "#29394c"
+
+                            Row {
+                                anchors.fill: parent
+                                anchors.margins: 9
+                                spacing: 10
+
+                                Column {
+                                    width: parent.width - 208
+                                    spacing: 4
+
+                                    Text {
+                                        width: parent.width
+                                        elide: Text.ElideRight
+                                        text: modelData.name
+                                        color: "#eff5fc"
+                                        font.pixelSize: 13
+                                    }
+
+                                    Text {
+                                        text: app.prettySize(modelData.size)
+                                        color: "#89a6be"
+                                        font.pixelSize: 10
+                                    }
+                                }
+
+                                BridgeButton {
+                                    width: 103
+                                    height: 32
+                                    caption: "↓  Download"
+                                    base: "#24516a"
+
+                                    onTriggered: {
+                                        app.doDownload(modelData.id)
+                                    }
+                                }
+
+                                BridgeButton {
+                                    width: 74
+                                    height: 32
+                                    caption: "Delete"
+                                    base: "#462d39"
+                                    ink: "#ffc4d1"
+
+                                    onTriggered: {
+                                        app.doDelete(modelData.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Text {
+                        anchors.centerIn: fileList
+                        visible: app.files.length === 0
+                        text: "No files yet. Send one across the bridge."
+                        color: "#758fa9"
+                        font.pixelSize: 13
+                    }
+                }
+
+                // Notification footer
                 Rectangle {
-                    width: parent.width; height: 51; radius: 9; color: "#182738"
-                    Text { anchors.fill: parent; anchors.margins: 13; text: app.notice; elide: Text.ElideRight; color: "#a3cfe8"; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
+                    id: statusPanel
+
+                    width: parent.width
+                    height: 45
+                    radius: 10
+                    color: "#1b2b3c"
+
+                    Rectangle {
+                        x: 0
+                        width: 4
+                        height: parent.height
+                        radius: 2
+                        color: "#c7aa76"
+                    }
+
+                    Text {
+                        anchors.fill: parent
+                        anchors.leftMargin: 17
+                        anchors.rightMargin: 14
+                        verticalAlignment: Text.AlignVCenter
+
+                        text: app.notice
+                        elide: Text.ElideRight
+                        font.pixelSize: 12
+                        color: "#b6d1e7"
+                    }
                 }
             }
         }

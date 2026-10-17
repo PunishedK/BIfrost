@@ -62,10 +62,14 @@ func main() {
 			err = upload(os.Args[2])
 		}
 	case "download":
-		if len(os.Args) < 3 {
-			err = errors.New("use: bifrost download ID")
+		if len(os.Args) < 3 || len(os.Args) > 4 {
+			err = errors.New("use: bifrost download ID [FOLDER]")
 		} else {
-			err = download(os.Args[2])
+			folder := ""
+			if len(os.Args) == 4 {
+				folder = os.Args[3]
+			}
+			err = download(os.Args[2], folder)
 		}
 	case "delete":
 		if len(os.Args) < 3 {
@@ -83,7 +87,7 @@ func main() {
 	}
 }
 func usage() {
-	fmt.Println("BIfrost — serve [--lan] | health | pair [--ip x.x.x.x] | list | upload PATH | download ID | delete ID | revoke")
+	fmt.Println("BIfrost — serve [--lan] | health | pair [--ip x.x.x.x] | list | upload PATH | download ID [FOLDER] | delete ID | revoke")
 }
 
 func serve(args []string) error {
@@ -264,7 +268,7 @@ func upload(fileArg string) error {
 	fmt.Println(strings.TrimSpace(string(b)))
 	return nil
 }
-func download(id string) error {
+func download(id, chosenFolder string) error {
 	// Read metadata first to determine the server-provided original filename.
 	b, err := getResponse(api("GET", "/api/files", nil))
 	if err != nil {
@@ -284,10 +288,21 @@ func download(id string) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 		return errors.New("unknown file ID")
 	}
-	home, _ := os.UserHomeDir()
-	dir := filepath.Join(home, "Downloads", "BIfrost")
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
+	dir := chosenFolder
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, "Downloads", "BIfrost")
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			return err
+		}
+	} else {
+		info, err := os.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("cannot access download folder: %w", err)
+		}
+		if !info.IsDir() {
+			return errors.New("download destination must be a folder")
+		}
 	}
 	dest := filepath.Join(dir, name)
 	// Never overwrite an existing download.
