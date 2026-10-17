@@ -4,7 +4,6 @@ import (
 	"bifrost.local/native"
 	"bifrost.local/native/internal/engine"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -102,13 +101,12 @@ func serve(args []string) error {
 	return h.ListenAndServe()
 }
 func api(method, path string, body io.Reader) (*http.Response, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, localBase+path, body)
+	req, err := http.NewRequest(method, localBase+path, body)
 	if err != nil {
 		return nil, err
 	}
-	return http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 5 * time.Minute}
+	return client.Do(req)
 }
 func getResponse(res *http.Response, err error) ([]byte, error) {
 	if err != nil {
