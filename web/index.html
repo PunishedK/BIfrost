@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b111b" />
+  <title>BIfrost · Local sharing</title>
+  <link rel="stylesheet" href="/style.css" />
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<main class="app">
+  <header><div class="logo"><span class="snow">❄</span><div><strong>BIfrost</strong><small>Private device bridge</small></div></div><span class="pill">LOCAL NETWORK</span></header>
+  <section id="pair-view" class="panel" hidden>
+    <div class="eyebrow">PAIR DEVICE</div>
+    <h1>Connect to BIfrost.</h1>
+    <p class="muted">Confirm this one-time invitation to access the Arch computer.</p>
+    <button id="pair-btn">Connect securely</button><p class="message" id="pair-msg"></p>
+  </section>
+  <section id="app-view" hidden>
+    <div class="hero"><div class="eyebrow">SIMPLE · LOCAL · PRIVATE</div><h1>Share without boundaries.</h1><p>Move photos, documents and videos between your phone and Arch Linux.</p></div>
+    <section class="panel">
+      <div class="head"><h2>Send to Arch</h2><span>Maximum 512 MiB per file</span></div>
+      <label class="drop"><span class="upload-icon">↑</span><strong>Choose files</strong><span>Photos, videos, PDFs and more</span><input id="file-picker" type="file" multiple /></label>
+      <div id="upload-items"></div>
+    </section>
+    <section class="panel"><div class="head"><h2>Stored files</h2><button id="refresh-btn" class="secondary">Refresh</button></div><div id="file-items" class="items"></div></section>
+    <p id="msg" class="message"></p>
+  </section>
+</main>
+</body></html>

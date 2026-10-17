@@ -1,0 +1,17 @@
+# Tests stay local; NEVER stage or push test sources
+*_test.go
+/tests/
+
+# Machine state and compiled binaries
+/bin/
+/build/
+/storage/
+/data/
+*.db
+*.log
+*.tmp
+
+# Editor and OS
+.vscode/
+.idea/
+.DS_Store
